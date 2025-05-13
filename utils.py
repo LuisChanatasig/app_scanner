@@ -4,35 +4,25 @@ import cv2
 import numpy as np
 import re
 
-# Habilitar esto solo si estás en Windows y Tesseract no está en PATH
+# Descomenta esta línea solo si estás en Windows y Tesseract no está en el PATH
 # pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 def preprocess_image(pil_image: Image.Image) -> Image.Image:
-    # Convertir a array y a escala de grises
     image = np.array(pil_image.convert('RGB'))
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-
-    # Aumentar contraste
     gray = cv2.equalizeHist(gray)
-
-    # Eliminar ruido con un desenfoque leve
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-
-    # Binarización adaptativa
     thresh = cv2.adaptiveThreshold(
         blurred, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,  # Invertir puede ayudar a Tesseract
+        cv2.THRESH_BINARY_INV,
         blockSize=15,
         C=8
     )
-
     return Image.fromarray(thresh)
 
 def extract_plate_data(original_image: Image.Image) -> dict:
     image = preprocess_image(original_image)
-    
-    # Configuración avanzada de Tesseract
     custom_config = r'--oem 3 --psm 6 -l spa'
     text = pytesseract.image_to_string(image, config=custom_config)
 

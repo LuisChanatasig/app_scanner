@@ -15,7 +15,7 @@ async def scan_document(file: UploadFile = File(...)):
 
     try:
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")  # Asegura que se pueda procesar correctamente
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
         data = extract_plate_data(image)
         return JSONResponse(content=data)
     except UnidentifiedImageError:
