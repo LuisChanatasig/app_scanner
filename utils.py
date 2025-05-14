@@ -1,34 +1,38 @@
+import sys
+import json
 import pytesseract
 from PIL import Image
 import cv2
 import numpy as np
 import re
 
-# Descomenta esta línea solo si estás en Windows y Tesseract no está en el PATH
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# (Tu configuración y funciones preprocess_image, clean_text, parse_ocr_text quedan igual)
+pytesseract.pytesseract.tesseract_cmd = r'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'
 
 def preprocess_image(pil_image: Image.Image) -> Image.Image:
     image = np.array(pil_image.convert('RGB'))
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    gray = cv2.equalizeHist(gray)
-    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        blockSize=15,
-        C=8
-    )
-    return Image.fromarray(thresh)
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return Image.fromarray(bw)
 
-def extract_plate_data(original_image: Image.Image) -> dict:
-    image = preprocess_image(original_image)
-    custom_config = r'--oem 3 --psm 6 -l spa'
-    text = pytesseract.image_to_string(image, config=custom_config)
+def clean_text(text: str) -> str:
+    replacements = {
+        "GASOLNA": "GASOLINA",
+        "COLOUB": "COLOMBIA",
+        "COLOMB": "COLOMBIA",
+        "OMGEN": "ORIGEN",
+        "ORICEN": "ORIGEN",
+        "ECUASOR": "ECUADOR",
+        "MOVTIAD": "MOVILIDAD",
+        "PUBLICA 0E": "PUBLICA DE"
+    }
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
+    return text
 
-    print("\n=== TEXTO DETECTADO POR OCR ===\n", text, "\n==============================")
-
-    lines = [line.strip().upper() for line in text.split('\n') if line.strip()]
+def parse_ocr_text(ocr_text: str) -> dict:
+    ocr_text = clean_text(ocr_text)
+    lines = [line.strip() for line in ocr_text.upper().splitlines() if line.strip()]
 
     data = {
         "placa_actual": "",
@@ -38,66 +42,97 @@ def extract_plate_data(original_image: Image.Image) -> dict:
         "motor": "",
         "marca": "",
         "modelo": "",
+        "cilindraje": "",
         "clase": "",
         "tipo_vehiculo": "",
         "pais_origen": "",
         "combustible": "",
         "color_1": "",
         "color_2": "",
-        "cilindraje": "",
         "pasajeros": "",
         "carroceria": "",
         "tipo_peso": "",
+        "año_modelo": "",
+        "observaciones": ""
     }
 
+    # VIN (17 caracteres alfanum), quitando espacios
+    vin_candidates = re.findall(r'([A-HJ-NPR-Z0-9]{17})', ocr_text.replace(" ", ""))
+    if vin_candidates:
+        data["vin"] = vin_candidates[0]
+
+    # Placas estilo ECUADOR: 2–3 letras + 3–4 dígitos
+    placas = re.findall(r'\b[A-Z]{2,3}[0-9]{3,4}\b', ocr_text)
+    if placas:
+        data["placa_actual"] = placas[0]
+        if len(placas) > 1:
+            data["placa_anterior"] = placas[1]
+
+    # Año fabricación
+    año_match = re.search(r'A[ÑN]O[\s:\-]*([0-9]{4})', ocr_text)
+    if año_match:
+        data["año"] = año_match.group(1)
+
+    # Año modelo
+    modelo_match = re.search(r'A[ÑN]O MODELO[\s:\-]*([0-9]{4})', ocr_text)
+    if modelo_match:
+        data["año_modelo"] = modelo_match.group(1)
+
     for line in lines:
-        if "PLACA ACTUAL" in line:
-            match = re.search(r'[A-Z]{3}[0-9]{3}[A-Z]?', line)
-            if match:
-                data["placa_actual"] = match.group()
-        elif "PLACA ANTERIOR" in line:
-            match = re.search(r'[A-Z]{3}[0-9]{3}[A-Z]?', line)
-            if match:
-                data["placa_anterior"] = match.group()
-        elif "AÑO" in line:
-            match = re.search(r'\b(19|20)\d{2}\b', line)
-            if match:
-                data["año"] = match.group()
-        elif "CHASIS" in line or "VIN" in line:
-            match = re.search(r'\b[A-Z0-9]{10,}\b', line)
-            if match:
-                data["vin"] = match.group()
-        elif "MOTOR" in line:
-            match = re.search(r'\b[A-Z0-9]{6,}\b', line)
-            if match:
-                data["motor"] = match.group()
-        elif "MARCA" in line:
-            data["marca"] = line.replace("MARCA", "").strip()
-        elif "MODELO" in line:
-            data["modelo"] = line.replace("MODELO", "").strip()
-        elif "CLASE" in line:
-            data["clase"] = line.replace("CLASE DE VEHÍCULO", "").replace("CLASE", "").strip()
-        elif "TIPO DE VEHÍCULO" in line:
-            data["tipo_vehiculo"] = line.replace("TIPO DE VEHÍCULO", "").strip()
-        elif "ORIGEN" in line:
-            data["pais_origen"] = line.split()[-1]
-        elif "COMBUSTIBLE" in line:
-            data["combustible"] = line.split()[-1]
-        elif "COLOR 1" in line:
-            data["color_1"] = line.replace("COLOR 1", "").strip()
-        elif "COLOR 2" in line:
-            data["color_2"] = line.replace("COLOR 2", "").strip()
-        elif "CILINDRAJE" in line:
-            match = re.search(r'\b[0-9]{2,4}\b', line)
-            if match:
-                data["cilindraje"] = match.group()
-        elif "PASAJEROS" in line:
-            match = re.search(r'\b[0-9]+\b', line)
-            if match:
-                data["pasajeros"] = match.group()
-        elif "CARROCERÍA" in line or "CARROCERIA" in line:
-            data["carroceria"] = line.split()[-1]
-        elif "TIPO DE PESO" in line:
-            data["tipo_peso"] = line.replace("TIPO DE PESO", "").strip()
+        if any(make in line for make in ["CHEVROLET", "TOYOTA", "HYUNDAI", "KIA", "FORD", "MAZDA"]):
+            parts = line.split()
+            data["marca"] = parts[0]
+            data["modelo"] = " ".join(parts[1:]) if len(parts) > 1 else ""
+            continue
+
+        if "GASOLINA" in line or "DIESEL" in line or "ELECTRICO" in line:
+            data["combustible"] = ("GASOLINA" if "GASOLINA" in line 
+                                   else "DIESEL" if "DIESEL" in line 
+                                   else "ELECTRICO")
+            continue
+
+        if any(c in line for c in ["COLOMBIA", "JAPON", "ECUADOR", "ALEMANIA"]):
+            data["pais_origen"] = line
+            continue
+
+        if "SEDAN" in line or "JEEP" in line:
+            data["tipo_vehiculo"] = line
+        if "AUTOMOVIL" in line or "MOTOCICLETA" in line:
+            data["clase"] = line
+        if "GRAVAMEN" in line:
+            data["observaciones"] = line
+        if re.fullmatch(r"[0-9]{3,4}", line) and not data["cilindraje"]:
+            data["cilindraje"] = line
+        if "METALICA" in line or "FIBRA" in line:
+            data["carroceria"] = line
+        if "LIVIANO" in line or "PESADO" in line:
+            data["tipo_peso"] = line
+        if any(col in line for col in ["PLATA", "NEGRO", "BLANCO", "PLOMO", "GRIS"]):
+            if not data["color_1"]:
+                data["color_1"] = line
+            elif not data["color_2"]:
+                data["color_2"] = line
+        if re.fullmatch(r"\d+", line):
+            data["pasajeros"] = line
+        if re.match(r'[A-Z0-9]{8,}', line) and not data["motor"] and "CHASIS" not in line:
+            data["motor"] = line
 
     return data
+
+def extract_plate_data(image: Image.Image) -> dict:
+    # opcional: image = preprocess_image(image)
+    ocr_text = pytesseract.image_to_string(image, lang='spa')
+    return parse_ocr_text(ocr_text)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Uso: python ocr_plate.py ruta/a/la/imagen.png")
+        sys.exit(1)
+
+    img_path = sys.argv[1]
+    img = Image.open(img_path)
+    # img = preprocess_image(img)   # descomenta si quieres aplicar binarización
+    resultado = extract_plate_data(img)
+
+    # Imprime JSON bonito en consola
+    print(json.dumps(resultado, ensure_ascii=False, indent=2))
